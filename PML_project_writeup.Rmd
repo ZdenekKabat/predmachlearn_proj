@@ -1,0 +1,125 @@
+---
+title: "Predicting Weight Lifting Habits"
+author: "Zdenek Kabat"
+date: "Friday, January 23, 2015"
+output: html_document
+---
+
+## Introduction
+
+This document describes my approach Coursera Practical Machine Learning course project [here](https://class.coursera.org/predmachlearn-010). The goal of the project is to 
+apply machine learning algorithm to a real-world problem. Here is a description from
+Coursera:
+
+> Using devices such as *Jawbone Up*, *Nike FuelBand*, and *Fitbit* it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website [here](http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset). 
+
+Data for the project were downloaded here: [training set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [testing set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).
+
+## Approach
+
+```{r chunk1, echo = FALSE, message = FALSE}
+library(dplyr)
+library(tidyr)
+library(caret)
+library(ggplot2)
+library(randomForest)
+
+url1 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url2 <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+if(!file.exists("pml-training.csv")){
+     download.file(url1, "./pml-training.csv")
+}
+
+if(!file.exists("pml-testing.csv")){
+     download.file(url2, "./pml-testing.csv")
+}
+```
+
+For the data preparation step, we load data into R and after some investigation,
+we set all the columns 8 to 159 as numerical (these are acceleration and gyroscope
+readings). Also, we remove all the columns with missing values:
+
+```{r chunk2, warning = FALSE}
+data_train <- read.csv("./pml-training.csv", header = TRUE)
+data_test <- read.csv("./pml-testing.csv", header = TRUE)
+
+for(i in 8:159){
+     data_train[,i] <- as.numeric(as.character(data_train[,i]))
+     data_test[,i] <- as.numeric(as.character(data_test[,i]))
+}
+
+keepCols <- which(colSums(is.na(data_train)) == 0)
+
+data_train <- dplyr::select(data_train, keepCols)
+data_test <- dplyr::select(data_test, keepCols)
+```
+
+Removing columns with no data is obviously no issue. But we have also removed 
+several columns with sparse data (aggregated values over some time windows). This
+might introduce some bias into the results but as you will see further, the
+results with selected columns are very good.
+
+In the next step we divide the training data into training set (60%) and test set
+(40%). Note that these are different test data then loaded above - those are put aside 
+until the submission. We also remove several columns in the data that are apparently
+not useful for prediction (user name, time stamps, window numbers...).
+
+```{r chunk3}
+set.seed(14839)
+inTrain <- createDataPartition(y = data_train$classe, p = 0.6, list = FALSE)
+training <- data_train[inTrain, 8:60]
+testing <- data_train[-inTrain, 8:60]
+```
+
+In the first iteration we decided to use the data "as is" and use random forest
+model directly. Random forest is currently one of the two best classification
+models which made it the first choice.
+
+We used the test set as defined above to evaluate the model error. Random forest
+includes its own "out of bag" error estimate coming from the built-in bootstrapping
+procedure. We compared these two error rates and their convergence with the
+number of trees.
+
+```{r model1, cache = TRUE}
+set.seed(4382)
+fitRF <- randomForest(classe ~ ., data = training, 
+                         xtest = testing[, -53], ytest = testing[, 53], 
+                         ntree = 100, importance = TRUE)
+
+fitRF
+```
+
+The number of trees was set first at lower level of 100 and was assessed using 
+the convergence graph as shown below. We compared the OOB and test error rates
+to visualise if we need more trees and for the reason of overfitting:
+
+```{r model2, fig.width = 10, fig.height = 5}
+errrate <- data.frame(iteration = 1:length(fitRF$err.rate[,1]),
+                      OOB = fitRF$err.rate[,1],
+                      Test = fitRF$test$err.rate[,1]) %>%
+     gather(set, error, -iteration)
+
+qplot(x = iteration, y = error, data = errrate, geom = "line", 
+      color = set, size = I(1), xlab = "Number of trees",
+      ylab = "Error rate", main = "Random Forest classification error")
+```
+
+It can be seen from the graph that the algorithm converged basically at around 
+iteration 50 and also that there should be no overfitting (OOB and test errors
+are very close to each other).
+
+For the `mtry` parameter of `randomForest()`, we tried using `tuneRF()` function
+that helps to determine the best number of variables for each step in random
+forest. However, we found the results very unstable and depending on the seed, 
+therefore the default value of `mtry` was used.
+
+## Conclusion
+
+As the classification error on both random forest bootstrapping sets and the test
+set was below 1%, we decided not to use another algorithm. Also, the results were
+succesfully used to submit all the Coursera test cases with 100% accuracy.
+
+Overall, we used all the complete numerical features from the data and have chosen 
+random forest with 100 trees and default `mtry` as the suitable algorithm resulting 
+in estimated error rate of ca 0.8%.
